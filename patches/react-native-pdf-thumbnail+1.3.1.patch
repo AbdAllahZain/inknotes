@@ -1,0 +1,109 @@
+diff --git a/node_modules/react-native-pdf-thumbnail/android/src/main/java/org/songsterq/pdfthumbnail/PdfThumbnailModule.kt b/node_modules/react-native-pdf-thumbnail/android/src/main/java/org/songsterq/pdfthumbnail/PdfThumbnailModule.kt
+index 921b578..4a05bb5 100644
+--- a/node_modules/react-native-pdf-thumbnail/android/src/main/java/org/songsterq/pdfthumbnail/PdfThumbnailModule.kt
++++ b/node_modules/react-native-pdf-thumbnail/android/src/main/java/org/songsterq/pdfthumbnail/PdfThumbnailModule.kt
+@@ -4,6 +4,7 @@ import android.content.ContentResolver
+ import android.graphics.Bitmap
+ import android.graphics.Canvas
+ import android.graphics.Color
++import android.graphics.Matrix
+ import android.graphics.pdf.PdfRenderer
+ import android.net.Uri
+ import android.os.ParcelFileDescriptor
+@@ -77,6 +78,96 @@ class PdfThumbnailModule(reactContext: ReactApplicationContext) :
+     }
+   }
+ 
++
++  /** InkNotes patch: sizes (in PDF points, already rotated) of every page. */
++  @ReactMethod
++  fun getPageInfo(filePath: String, promise: Promise) {
++    var parcelFileDescriptor: ParcelFileDescriptor? = null
++    var pdfRenderer: PdfRenderer? = null
++    try {
++      parcelFileDescriptor = getParcelFileDescriptor(filePath)
++      if (parcelFileDescriptor == null) {
++        promise.reject("FILE_NOT_FOUND", "File $filePath not found")
++        return
++      }
++      pdfRenderer = PdfRenderer(parcelFileDescriptor)
++      val result = WritableNativeArray()
++      for (i in 0 until pdfRenderer.pageCount) {
++        val p = pdfRenderer.openPage(i)
++        val m = WritableNativeMap()
++        m.putInt("width", p.width)
++        m.putInt("height", p.height)
++        p.close()
++        result.pushMap(m)
++      }
++      promise.resolve(result)
++    } catch (ex: Exception) {
++      promise.reject("INTERNAL_ERROR", ex)
++    } finally {
++      try { pdfRenderer?.close() } catch (e: Exception) {}
++      try { parcelFileDescriptor?.close() } catch (e: Exception) {}
++    }
++  }
++
++  /** InkNotes patch: render one page at an arbitrary scale into outPath (JPEG). */
++  @ReactMethod
++  fun renderPage(filePath: String, page: Int, scale: Double, quality: Int, outPath: String, promise: Promise) {
++    var parcelFileDescriptor: ParcelFileDescriptor? = null
++    var pdfRenderer: PdfRenderer? = null
++    try {
++      parcelFileDescriptor = getParcelFileDescriptor(filePath)
++      if (parcelFileDescriptor == null) {
++        promise.reject("FILE_NOT_FOUND", "File $filePath not found")
++        return
++      }
++      pdfRenderer = PdfRenderer(parcelFileDescriptor)
++      if (page < 0 || page >= pdfRenderer.pageCount) {
++        promise.reject("INVALID_PAGE", "Page number $page is invalid, file has ${pdfRenderer.pageCount} pages")
++        return
++      }
++      val currentPage = pdfRenderer.openPage(page)
++      val w = currentPage.width
++      val h = currentPage.height
++      var s = scale
++      val maxDim = 4096.0
++      val biggest = Math.max(w, h).toDouble() * s
++      if (biggest > maxDim) {
++        s = maxDim / Math.max(w, h).toDouble()
++      }
++      val bw = Math.max(1, Math.round(w * s).toInt())
++      val bh = Math.max(1, Math.round(h * s).toInt())
++      val bitmap = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
++      bitmap.eraseColor(Color.WHITE)
++      val matrix = Matrix()
++      matrix.setScale(bw.toFloat() / w.toFloat(), bh.toFloat() / h.toFloat())
++      currentPage.render(bitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
++      currentPage.close()
++
++      val outFile = File(outPath)
++      outFile.parentFile?.mkdirs()
++      val out = FileOutputStream(outFile)
++      bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
++      out.flush()
++      out.close()
++      bitmap.recycle()
++
++      val map = WritableNativeMap()
++      map.putString("uri", Uri.fromFile(outFile).toString())
++      map.putInt("width", w)
++      map.putInt("height", h)
++      map.putInt("pixelWidth", bw)
++      map.putInt("pixelHeight", bh)
++      promise.resolve(map)
++    } catch (ex: OutOfMemoryError) {
++      promise.reject("OUT_OF_MEMORY", "Not enough memory to render this page")
++    } catch (ex: Exception) {
++      promise.reject("INTERNAL_ERROR", ex)
++    } finally {
++      try { pdfRenderer?.close() } catch (e: Exception) {}
++      try { parcelFileDescriptor?.close() } catch (e: Exception) {}
++    }
++  }
++
+   private fun getParcelFileDescriptor(filePath: String): ParcelFileDescriptor? {
+     val uri = Uri.parse(filePath)
+     if (ContentResolver.SCHEME_CONTENT == uri.scheme || ContentResolver.SCHEME_FILE == uri.scheme) {

@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "InkNotes",
+    "slug": "inknotes",
+    "version": "1.0.0",
+    "orientation": "default",
+    "newArchEnabled": false,
+    "android": {
+      "package": "com.inknotes.app",
+      "versionCode": 1,
+      "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#4F46E5"
+      }
+    },
+    "icon": "./assets/icon.png",
+    "plugins": []
+  }
+}
