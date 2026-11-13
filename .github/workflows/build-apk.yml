@@ -28,6 +28,9 @@ jobs:
       - name: Generate the native Android project
         run: npx expo prebuild --platform android --no-install
 
+      - name: Give Gradle more memory
+        run: echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" >> android/gradle.properties
+
       - name: Build release APK
         working-directory: android
         run: |
