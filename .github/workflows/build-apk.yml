@@ -32,7 +32,32 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+          set -o pipefail
+          ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+      - name: Error summary (only when the build fails)
+        if: failure()
+        run: |
+          {
+            echo "## Compiler errors (javac / kotlinc / C++)"
+            echo '```'
+            grep -n -B2 -A8 -E "\.(java|kt|cpp|h|c):[0-9]+(:[0-9]+)?:? .*error|: error:|^e: " build.log | head -120 || true
+            echo '```'
+            echo "## Gradle summary"
+            echo '```'
+            grep -n -E "FAILED|What went wrong|Execution failed|Caused by|fatal error|undefined reference|CMake Error|ninja: build stopped|Could not (resolve|find|get)" build.log | head -40 || true
+            echo '```'
+            echo "## Last 40 lines"
+            echo '```'
+            tail -n 40 build.log
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-log
+          path: build.log
 
       - uses: actions/upload-artifact@v4
         with:

@@ -1,3 +1,16 @@
+diff --git a/node_modules/react-native-pdf-thumbnail/android/build.gradle b/node_modules/react-native-pdf-thumbnail/android/build.gradle
+index 37d07c9..d6920a1 100644
+--- a/node_modules/react-native-pdf-thumbnail/android/build.gradle
++++ b/node_modules/react-native-pdf-thumbnail/android/build.gradle
+@@ -44,7 +44,7 @@ def supportsNamespace() {
+ 
+ android {
+   if (supportsNamespace()) {
+-    namespace "com.pdfthumbnail"
++    namespace "org.songsterq.pdfthumbnail"
+ 
+     sourceSets {
+       main {
 diff --git a/node_modules/react-native-pdf-thumbnail/android/src/main/java/org/songsterq/pdfthumbnail/PdfThumbnailModule.kt b/node_modules/react-native-pdf-thumbnail/android/src/main/java/org/songsterq/pdfthumbnail/PdfThumbnailModule.kt
 index 921b578..c261214 100644
 --- a/node_modules/react-native-pdf-thumbnail/android/src/main/java/org/songsterq/pdfthumbnail/PdfThumbnailModule.kt
