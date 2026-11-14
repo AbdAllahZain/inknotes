@@ -19,6 +19,7 @@ import { COLORS, DEFAULT_SIZE, HIGHLIGHT_COLORS } from '../tools';
 import type { Doc, Item, PageBg, ShapeItem, ShapeKind, StrokeItem, TextItem, ToolId } from '../types';
 import { PromptModal } from '../ui/PromptModal';
 import { SheetMenu, SheetItem } from '../ui/SheetMenu';
+import { ErrorBoundary } from '../ui/ErrorBoundary';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Editor'>;
 
@@ -33,7 +34,7 @@ function hitItem(it: Item, x: number, y: number, r: number): boolean {
   return x >= b.x - r && x <= b.x + b.w + r && y >= b.y - r && y <= b.y + b.h + r;
 }
 
-export function EditorScreen({ route, navigation }: Props) {
+function EditorInner({ route, navigation }: Props) {
   const { docId } = route.params;
   const [doc, setDoc] = useState<Doc | null>(null);
   const docRef = useRef<Doc | null>(null);
@@ -458,3 +459,11 @@ const styles = StyleSheet.create({
   busy: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
   backBtn: { marginTop: 18, backgroundColor: theme.primary, borderRadius: 12, paddingHorizontal: 22, paddingVertical: 10 },
 });
+
+export function EditorScreen(props: Props) {
+  return (
+    <ErrorBoundary onBack={() => props.navigation.goBack()}>
+      <EditorInner {...props} />
+    </ErrorBoundary>
+  );
+}

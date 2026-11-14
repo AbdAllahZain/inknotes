@@ -53,6 +53,11 @@ const ar = {
   lastPage: 'لا يمكن حذف الصفحة الوحيدة',
   close: 'إغلاق',
   more: 'المزيد',
+  errorTitle: 'حدث خطأ غير متوقع',
+  errorHint: 'صوّر هذه الشاشة أو انسخ النص وأرسله للمطوّر.',
+  dismiss: 'إخفاء',
+  back: 'رجوع',
+  lastError: 'آخر خطأ سُجّل في التطبيق',
 };
 
 type Dict = typeof ar;
@@ -110,6 +115,11 @@ const en: Dict = {
   lastPage: "You can't delete the only page",
   close: 'Close',
   more: 'More',
+  errorTitle: 'Unexpected error',
+  errorHint: 'Take a screenshot of this screen (or copy the text) and send it to the developer.',
+  dismiss: 'Dismiss',
+  back: 'Back',
+  lastError: 'Last error recorded by the app',
 };
 
 function detectLocale(): string {

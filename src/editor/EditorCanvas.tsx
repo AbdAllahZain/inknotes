@@ -130,12 +130,6 @@ export function EditorCanvas(props: Props) {
   // ---- layout bookkeeping ---------------------------------------------------
   const [range, setRange] = useState({ first: 0, last: 1 });
 
-  const fitScale = useCallback(() => {
-    'worklet';
-    const vw = viewW.value;
-    return vw > 0 ? vw / contentW.value : 1;
-  }, []);
-
   const clampTx = (v: number, s: number) => {
     'worklet';
     const cw = contentW.value * s;
@@ -200,6 +194,8 @@ export function EditorCanvas(props: Props) {
     ty.value = withTiming(clampTy(-(L[g.page * 4 + 1] - MARGIN) * s, s), { duration: 220 });
   }, [props.gotoRequest?.nonce]);
 
+  const notifyPage = useCallback((i: number) => cb.current.onCurrentPage(i), []);
+
   // visible page range + current page
   useAnimatedReaction(
     () => {
@@ -245,7 +241,6 @@ export function EditorCanvas(props: Props) {
     []
   );
 
-  const notifyPage = useCallback((i: number) => cb.current.onCurrentPage(i), []);
 
   // ---- JS callbacks ---------------------------------------------------------
   const clearLiveIfSame = useCallback((s: number) => {

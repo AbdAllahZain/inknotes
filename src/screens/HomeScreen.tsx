@@ -20,6 +20,7 @@ import type { RootStackParamList } from '../navigation';
 import { createNote, deleteDoc, importPdf, listDocs, loadDoc, saveDoc } from '../services/storage';
 import { theme } from '../theme';
 import type { DocMeta, PageBg } from '../types';
+import { clearLastError, readLastError } from '../services/crashLog';
 import { PromptModal } from '../ui/PromptModal';
 import { SheetItem, SheetMenu } from '../ui/SheetMenu';
 
@@ -42,9 +43,11 @@ export function HomeScreen({ navigation }: Props) {
   const [paperOpen, setPaperOpen] = useState(false);
   const [selected, setSelected] = useState<DocMeta | null>(null);
   const [renaming, setRenaming] = useState<DocMeta | null>(null);
+  const [lastError, setLastError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setDocs(await listDocs());
+    setLastError(await readLastError());
   }, []);
 
   useEffect(() => {
@@ -136,6 +139,24 @@ export function HomeScreen({ navigation }: Props) {
           style={styles.search}
         />
       </View>
+
+      {lastError ? (
+        <View style={styles.errBox}>
+          <Text style={styles.errTitle}>{t('lastError')}</Text>
+          <Text selectable style={styles.errText}>
+            {lastError}
+          </Text>
+          <Pressable
+            onPress={async () => {
+              await clearLastError();
+              setLastError(null);
+            }}
+            style={styles.errBtn}
+          >
+            <Text style={{ color: '#fff', fontWeight: '700' }}>{t('dismiss')}</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       <FlatList
         key={cols}
@@ -248,5 +269,9 @@ const styles = StyleSheet.create({
   },
   fabSecondary: { backgroundColor: theme.surface, borderWidth: 1.5, borderColor: theme.primary },
   fabText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  errBox: { margin: 12, padding: 12, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FCA5A5' },
+  errTitle: { fontWeight: '800', color: '#B91C1C', marginBottom: 4 },
+  errText: { fontFamily: 'monospace', fontSize: 11, color: '#7F1D1D' },
+  errBtn: { alignSelf: 'flex-start', marginTop: 8, backgroundColor: '#B91C1C', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 6 },
   busy: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center' },
 });
