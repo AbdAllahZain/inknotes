@@ -2,7 +2,16 @@ import type { ShapeKind } from './ink/engine';
 
 export type { ShapeKind };
 
-export type ToolId = 'pen' | 'fountain' | 'pencil' | 'highlighter' | 'eraser' | 'shape' | 'text' | 'hand';
+export type ToolId =
+  | 'pen'
+  | 'fountain'
+  | 'pencil'
+  | 'highlighter'
+  | 'eraser'
+  | 'shape'
+  | 'text'
+  | 'select'
+  | 'hand';
 export type InkTool = 'pen' | 'fountain' | 'pencil' | 'highlighter';
 
 export type StrokeItem = {
@@ -25,6 +34,8 @@ export type ShapeItem = {
   y1: number;
   x2: number;
   y2: number;
+  /** set when the shape came from "hold to snap" so it keeps the pen look (e.g. translucent highlighter) */
+  tool?: InkTool;
 };
 
 export type TextItem = {
@@ -38,9 +49,22 @@ export type TextItem = {
   fontSize: number;
 };
 
-export type Item = StrokeItem | ShapeItem | TextItem;
+export type ImageItem = {
+  id: string;
+  k: 'i';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** file name inside the document folder */
+  file: string;
+};
 
-export type PageBg = 'blank' | 'lined' | 'grid' | 'dots' | 'pdf';
+export type Item = StrokeItem | ShapeItem | TextItem | ImageItem;
+
+export type PageBg = 'blank' | 'lined' | 'grid' | 'dots' | 'cornell' | 'music' | 'yellow' | 'dark' | 'pdf';
+
+export const PAPER_CHOICES: PageBg[] = ['blank', 'lined', 'grid', 'dots', 'cornell', 'music', 'yellow', 'dark'];
 
 export type Page = {
   id: string;
@@ -48,7 +72,7 @@ export type Page = {
   h: number;
   bg: PageBg;
   items: Item[];
-  /** only for PDF documents: index of the page inside the source PDF */
+  /** only for pages that come from the imported PDF: index inside the source PDF */
   pdfIndex?: number;
 };
 
@@ -70,11 +94,21 @@ export type DocMeta = {
   updatedAt: number;
   pageCount: number;
   thumb?: string;
+  folder?: string;
+  tags?: string[];
 };
+
+export type Folder = { id: string; name: string };
+
+export type ThemeMode = 'system' | 'light' | 'dark';
 
 export type Settings = {
   /** finger scrolls / zooms, only the pen draws (palm rejection) */
   stylusOnly: boolean;
+  themeMode: ThemeMode;
+  appLock: boolean;
 };
+
+export const DEFAULT_SETTINGS: Settings = { stylusOnly: false, themeMode: 'system', appLock: false };
 
 export const A4 = { w: 595, h: 842 };

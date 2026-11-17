@@ -1,6 +1,6 @@
 import * as FileSystem from 'expo-file-system';
 import { Dimensions, PixelRatio } from 'react-native';
-import { A4, Doc, DocMeta, Page, PageBg, Settings } from '../types';
+import { A4, DEFAULT_SETTINGS, Doc, DocMeta, Folder, Page, PageBg, Settings } from '../types';
 import { getPdfPageSizes, renderPdfPage } from './pdfNative';
 
 const ROOT = FileSystem.documentDirectory + 'inknotes/';
@@ -12,7 +12,7 @@ export function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-async function ensureDir(dir: string) {
+export async function ensureDir(dir: string) {
   const info = await FileSystem.getInfoAsync(dir);
   if (!info.exists) await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
 }
@@ -26,9 +26,9 @@ export const pdfPathOf = (id: string) => docDir(id) + 'source.pdf';
 export async function loadSettings(): Promise<Settings> {
   try {
     const s = await FileSystem.readAsStringAsync(SETTINGS);
-    return { stylusOnly: false, ...JSON.parse(s) };
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(s) };
   } catch {
-    return { stylusOnly: false };
+    return { ...DEFAULT_SETTINGS };
   }
 }
 
@@ -39,7 +39,7 @@ export async function saveSettings(s: Settings) {
 
 // --------------------------------------------------------------------- index
 
-async function readIndex(): Promise<DocMeta[]> {
+export async function readIndex(): Promise<DocMeta[]> {
   try {
     const s = await FileSystem.readAsStringAsync(INDEX);
     const arr = JSON.parse(s);
@@ -49,7 +49,7 @@ async function readIndex(): Promise<DocMeta[]> {
   }
 }
 
-async function writeIndex(list: DocMeta[]) {
+export async function writeIndex(list: DocMeta[]) {
   await ensureDir(ROOT);
   await FileSystem.writeAsStringAsync(INDEX, JSON.stringify(list));
 }
@@ -78,6 +78,10 @@ export async function saveDoc(doc: Doc): Promise<void> {
   const i = list.findIndex((m) => m.id === doc.id);
   const thumb = i >= 0 ? list[i].thumb : undefined;
   const meta = metaOf(doc, thumb);
+  if (i >= 0) {
+    meta.folder = list[i].folder;
+    meta.tags = list[i].tags;
+  }
   if (i >= 0) list[i] = meta;
   else list.push(meta);
   await writeIndex(list);
@@ -177,4 +181,70 @@ export async function importPdf(sourceUri: string, name: string): Promise<Doc> {
     }
   } catch {}
   return doc;
+}
+
+
+// ------------------------------------------------------------ folders & tags
+
+const FOLDERS = ROOT + 'folders.json';
+
+export async function listFolders(): Promise<Folder[]> {
+  try {
+    const arr = JSON.parse(await FileSystem.readAsStringAsync(FOLDERS));
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeFolders(list: Folder[]) {
+  await ensureDir(ROOT);
+  await FileSystem.writeAsStringAsync(FOLDERS, JSON.stringify(list));
+}
+
+export async function createFolder(name: string): Promise<Folder> {
+  const list = await listFolders();
+  const f = { id: uid(), name: name.trim() };
+  list.push(f);
+  await writeFolders(list);
+  return f;
+}
+
+export async function renameFolder(id: string, name: string) {
+  const list = await listFolders();
+  await writeFolders(list.map((f) => (f.id === id ? { ...f, name: name.trim() } : f)));
+}
+
+export async function deleteFolder(id: string) {
+  const list = await listFolders();
+  await writeFolders(list.filter((f) => f.id !== id));
+  const docs = await readIndex();
+  await writeIndex(docs.map((d) => (d.folder === id ? { ...d, folder: undefined } : d)));
+}
+
+export async function setDocFolder(docId: string, folder: string | undefined) {
+  const docs = await readIndex();
+  await writeIndex(docs.map((d) => (d.id === docId ? { ...d, folder } : d)));
+}
+
+export async function setDocTags(docId: string, tags: string[]) {
+  const clean = Array.from(new Set(tags.map((x) => x.trim()).filter(Boolean)));
+  const docs = await readIndex();
+  await writeIndex(docs.map((d) => (d.id === docId ? { ...d, tags: clean } : d)));
+}
+
+// ----------------------------------------------------------- page thumbnails
+
+export function pageThumbPath(docId: string, pageIndex: number): string {
+  return CACHE + docId + '/t' + pageIndex + '.jpg';
+}
+
+/** Small JPEG of a PDF page (for the pages manager). */
+export async function ensurePageThumb(docId: string, pageIndex: number): Promise<string> {
+  const out = pageThumbPath(docId, pageIndex);
+  const info = await FileSystem.getInfoAsync(out);
+  if (info.exists) return out;
+  await ensureDir(CACHE + docId + '/');
+  const r = await renderPdfPage(pdfPathOf(docId), pageIndex, 0.32, out, 62);
+  return r.uri;
 }

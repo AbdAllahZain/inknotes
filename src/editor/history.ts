@@ -6,7 +6,10 @@ export type Op =
   | { t: 'edit'; pageId: string; before: TextItem; after: TextItem }
   | { t: 'addPage'; index: number; page: Page }
   | { t: 'delPage'; index: number; page: Page }
-  | { t: 'bg'; pageId: string; from: PageBg; to: PageBg };
+  | { t: 'bg'; pageId: string; from: PageBg; to: PageBg }
+  | { t: 'xform'; pageId: string; before: Item[]; after: Item[] }
+  | { t: 'addMany'; entries: { pageId: string; item: Item }[] }
+  | { t: 'movePage'; from: number; to: number };
 
 function mapPage(doc: Doc, pageId: string, fn: (p: Page) => Page): Doc {
   return { ...doc, pages: doc.pages.map((p) => (p.id === pageId ? fn(p) : p)) };
@@ -66,5 +69,21 @@ export function applyOp(doc: Doc, op: Op, invert: boolean): Doc {
     }
     case 'bg':
       return mapPage(doc, op.pageId, (p) => ({ ...p, bg: invert ? op.from : op.to }));
+    case 'xform': {
+      const list = invert ? op.before : op.after;
+      const byId = new Map(list.map((it) => [it.id, it] as const));
+      return mapPage(doc, op.pageId, (p) => ({ ...p, items: p.items.map((it) => byId.get(it.id) ?? it) }));
+    }
+    case 'addMany':
+      return invert ? removeItems(doc, op.entries) : addItems(doc, op.entries);
+    case 'movePage': {
+      const from = invert ? op.to : op.from;
+      const to = invert ? op.from : op.to;
+      const pages = doc.pages.slice();
+      if (from < 0 || from >= pages.length) return doc;
+      const [pg] = pages.splice(from, 1);
+      pages.splice(Math.max(0, Math.min(to, pages.length)), 0, pg);
+      return { ...doc, pages };
+    }
   }
 }

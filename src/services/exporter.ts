@@ -1,11 +1,16 @@
 import * as FileSystem from 'expo-file-system';
-import { BlendMode, degrees, PDFDocument, PDFPage, rgb } from 'pdf-lib';
-import { PRESETS } from '../tools';
-import { templateGeometry } from '../templates';
-import { rasterizeText, shapePolys, strokeOutline, textBox } from '../ink/render';
+import { BlendMode, degrees, PDFDocument, PDFImage, PDFPage, rgb } from 'pdf-lib';
+import { templateGeometry, paperColor } from '../templates';
+import {
+  itemIsHighlight,
+  itemOpacity,
+  rasterizeText,
+  shapePolys,
+  strokeOutline,
+} from '../ink/render';
 import type { Doc, Item, Page } from '../types';
 import { makeMapper, polyToSvg, type Mapper } from './pdfMap';
-import { pdfPathOf } from './storage';
+import { docDir, pdfPathOf } from './storage';
 
 function hexToRgb(hex: string) {
   const h = hex.replace('#', '');
@@ -13,42 +18,48 @@ function hexToRgb(hex: string) {
   return rgb(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
 }
 
-async function drawItem(pdf: PDFDocument, page: PDFPage, item: Item, m: Mapper) {
-  if (item.k === 's') {
-    const poly = strokeOutline(item);
-    if (poly.length < 6) return;
-    const preset = PRESETS[item.tool];
-    page.drawSvgPath(polyToSvg(poly, m), {
-      x: 0,
-      y: 0,
-      color: hexToRgb(item.color),
-      opacity: preset.opacity,
-      blendMode: item.tool === 'highlighter' ? BlendMode.Multiply : BlendMode.Normal,
-    });
-  } else if (item.k === 'h') {
-    const polys = shapePolys(item);
+type Ctx = { pdf: PDFDocument; docId: string; images: Map<string, PDFImage> };
+
+async function drawItem(ctx: Ctx, page: PDFPage, item: Item, m: Mapper) {
+  if (item.k === 's' || item.k === 'h') {
+    const polys = item.k === 's' ? [strokeOutline(item)] : shapePolys(item);
+    const opacity = itemOpacity(item);
+    const blend = itemIsHighlight(item) ? BlendMode.Multiply : BlendMode.Normal;
     for (const poly of polys) {
       if (poly.length < 6) continue;
-      page.drawSvgPath(polyToSvg(poly, m), { x: 0, y: 0, color: hexToRgb(item.color), opacity: 1 });
+      page.drawSvgPath(polyToSvg(poly, m), {
+        x: 0,
+        y: 0,
+        color: hexToRgb(item.color),
+        opacity,
+        blendMode: blend,
+      });
     }
-  } else {
-    const box = textBox(item);
+  } else if (item.k === 't') {
     const r = rasterizeText(item, 3);
     if (!r) return;
-    const img = await pdf.embedPng(r.base64);
+    const img = await ctx.pdf.embedPng(r.base64);
     const [ax, ay] = m.map(item.x, item.y + r.h);
-    page.drawImage(img, {
-      x: ax,
-      y: ay,
-      width: r.w * m.sx,
-      height: r.h * m.sy,
-      rotate: degrees(m.rot),
-    });
-    void box;
+    page.drawImage(img, { x: ax, y: ay, width: r.w * m.sx, height: r.h * m.sy, rotate: degrees(m.rot) });
+  } else {
+    let img = ctx.images.get(item.file);
+    if (!img) {
+      const b64 = await FileSystem.readAsStringAsync(docDir(ctx.docId) + item.file, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      img = item.file.toLowerCase().endsWith('.png') ? await ctx.pdf.embedPng(b64) : await ctx.pdf.embedJpg(b64);
+      ctx.images.set(item.file, img);
+    }
+    const [ax, ay] = m.map(item.x, item.y + item.h);
+    page.drawImage(img, { x: ax, y: ay, width: item.w * m.sx, height: item.h * m.sy, rotate: degrees(m.rot) });
   }
 }
 
-function drawTemplate(page: PDFPage, p: Page) {
+function drawPaper(page: PDFPage, p: Page) {
+  const paper = paperColor(p.bg);
+  if (paper !== '#FFFFFF') {
+    page.drawRectangle({ x: 0, y: 0, width: p.w, height: p.h, color: hexToRgb(paper) });
+  }
   const g = templateGeometry(p.bg, p.w, p.h);
   const col = hexToRgb(g.color);
   for (const l of g.lines) {
@@ -64,31 +75,36 @@ export function safeFileName(name: string): string {
   return s.length ? s.slice(0, 80) : 'inknotes';
 }
 
-/** Builds a PDF containing the original pages (for PDF docs) plus all ink as vector graphics. */
+/**
+ * Builds a PDF following the page order of the document: original PDF pages (copied from the source),
+ * pages added in the app (blank/ruled), and every piece of ink, shape, text and picture as vector/raster graphics.
+ */
 export async function exportDocToPdf(doc: Doc): Promise<string> {
-  let pdf: PDFDocument;
-  let pdfPages: PDFPage[];
-  const isNote = doc.type === 'note';
-  if (isNote) {
-    pdf = await PDFDocument.create();
-    pdfPages = doc.pages.map((p) => pdf.addPage([p.w, p.h]));
-  } else {
+  const out = await PDFDocument.create();
+  let src: PDFDocument | null = null;
+  if (doc.type === 'pdf') {
     const b64 = await FileSystem.readAsStringAsync(pdfPathOf(doc.id), { encoding: FileSystem.EncodingType.Base64 });
-    pdf = await PDFDocument.load(b64, { ignoreEncryption: true, updateMetadata: false });
-    pdfPages = pdf.getPages();
+    src = await PDFDocument.load(b64, { ignoreEncryption: true, updateMetadata: false });
   }
-  for (let i = 0; i < doc.pages.length; i++) {
-    const p = doc.pages[i];
-    const page = pdfPages[isNote ? i : p.pdfIndex ?? i];
-    if (!page) continue;
-    if (isNote) drawTemplate(page, p);
+  const ctx: Ctx = { pdf: out, docId: doc.id, images: new Map() };
+  for (const p of doc.pages) {
+    let page: PDFPage;
+    let fromSource = false;
+    if (src && p.bg === 'pdf' && p.pdfIndex !== undefined && p.pdfIndex < src.getPageCount()) {
+      const [copied] = await out.copyPages(src, [p.pdfIndex]);
+      page = out.addPage(copied);
+      fromSource = true;
+    } else {
+      page = out.addPage([p.w, p.h]);
+      drawPaper(page, p);
+    }
     if (!p.items.length) continue;
-    const m = makeMapper(page, p, isNote);
-    for (const item of p.items) await drawItem(pdf, page, item, m);
+    const m = makeMapper(page, p, !fromSource);
+    for (const item of p.items) await drawItem(ctx, page, item, m);
   }
-  pdf.setTitle(doc.title);
-  const out = await pdf.saveAsBase64();
+  out.setTitle(doc.title);
+  const base64 = await out.saveAsBase64();
   const path = FileSystem.cacheDirectory + safeFileName(doc.title) + '.pdf';
-  await FileSystem.writeAsStringAsync(path, out, { encoding: FileSystem.EncodingType.Base64 });
+  await FileSystem.writeAsStringAsync(path, base64, { encoding: FileSystem.EncodingType.Base64 });
   return path;
 }

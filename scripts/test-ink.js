@@ -32,3 +32,20 @@ let d = 'M' + poly[0].toFixed(2) + ' ' + poly[1].toFixed(2);
 for (let i = 2; i < poly.length; i += 2) d += 'L' + poly[i].toFixed(2) + ' ' + poly[i + 1].toFixed(2);
 fs.writeFileSync('/tmp/ink-preview.svg', `<svg xmlns="http://www.w3.org/2000/svg" width="260" height="260"><rect width="260" height="260" fill="white"/><path d="${d}Z" fill="black"/></svg>`);
 console.log('ink engine OK, outline vertices:', poly.length / 2);
+
+// ---- shape recognition
+function mk(points) { const a = []; for (const [x, y] of points) a.push(x, y, 1); return a; }
+function noise(v) { return v + (Math.random() - 0.5) * 3; }
+const wobblyLine = []; for (let i = 0; i <= 40; i++) wobblyLine.push([50 + i * 5, 100 + i * 1.2 + (Math.random() - 0.5) * 3]);
+const rl = E.recognizeShape(mk(wobblyLine)); if (rl[0] !== 1) throw new Error('line not recognised ' + rl);
+const circle = []; for (let i = 0; i <= 60; i++) { const a = i / 60 * Math.PI * 2.05; circle.push([noise(200 + Math.cos(a) * 60), noise(200 + Math.sin(a) * 40)]); }
+const rc = E.recognizeShape(mk(circle)); if (rc[0] !== 2) throw new Error('ellipse not recognised ' + rc);
+const rect = []; const R = [[100, 100], [220, 100], [220, 180], [100, 180], [100, 100]];
+for (let s = 0; s < 4; s++) for (let t = 0; t < 15; t++) rect.push([noise(R[s][0] + (R[s + 1][0] - R[s][0]) * t / 15), noise(R[s][1] + (R[s + 1][1] - R[s][1]) * t / 15)]);
+rect.push([noise(100), noise(102)]);
+const rr = E.recognizeShape(mk(rect)); if (rr[0] !== 3) throw new Error('rect not recognised ' + rr);
+const zig = []; for (let i = 0; i < 40; i++) zig.push([50 + i * 5, 100 + (i % 2 ? 25 : -25)]);
+if (E.recognizeShape(mk(zig))[0] !== 0) throw new Error('zigzag should not snap');
+const arc = []; for (let i = 0; i <= 40; i++) { const a = i / 40 * Math.PI; arc.push([200 + Math.cos(a) * 80, 200 + Math.sin(a) * 80]); }
+if (E.recognizeShape(mk(arc))[0] !== 0) throw new Error('open arc should not snap');
+console.log('shape recognition OK');

@@ -20,7 +20,7 @@ export const PRESETS: Record<InkTool, InkPreset> = {
   highlighter: { gain: 0, minFrac: 1, opacity: 0.4, fingerCutoff: 1.2, fingerBeta: 0.005, penCutoff: 3.0, penBeta: 0.015 },
 };
 
-export const TOOL_ORDER: ToolId[] = ['pen', 'fountain', 'pencil', 'highlighter', 'eraser', 'shape', 'text', 'hand'];
+export const TOOL_ORDER: ToolId[] = ['pen', 'fountain', 'pencil', 'highlighter', 'eraser', 'shape', 'text', 'select', 'hand'];
 
 export const SIZES: Record<ToolId, number[]> = {
   pen: [1.2, 2, 3.2, 5, 8],
@@ -30,6 +30,7 @@ export const SIZES: Record<ToolId, number[]> = {
   eraser: [10, 18, 30],
   shape: [1.5, 3, 5, 8],
   text: [14, 18, 24, 32, 44],
+  select: [],
   hand: [],
 };
 
@@ -41,6 +42,7 @@ export const DEFAULT_SIZE: Record<ToolId, number> = {
   eraser: 18,
   shape: 3,
   text: 18,
+  select: 0,
   hand: 0,
 };
 

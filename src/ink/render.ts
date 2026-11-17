@@ -7,6 +7,7 @@ import {
   TextAlign,
   TextDirection,
   type SkCanvas,
+  type SkImage,
   type SkPaint,
   type SkParagraph,
   type SkPath,
@@ -14,7 +15,8 @@ import {
 } from '@shopify/react-native-skia';
 import { PRESETS } from '../tools';
 import { templateGeometry } from '../templates';
-import type { Item, PageBg, ShapeItem, StrokeItem, TextItem } from '../types';
+import { docDir } from '../services/storage';
+import type { ImageItem, Item, PageBg, ShapeItem, StrokeItem, TextItem } from '../types';
 import { buildOutline, shapeOutlines, type Poly } from './engine';
 
 /** Append a closed polygon to a Skia path (worklet: also used on the UI thread). */
@@ -38,6 +40,17 @@ export function strokeOutline(item: StrokeItem): Poly {
 
 export function shapePolys(item: ShapeItem): Poly[] {
   return shapeOutlines(item.shape, item.x1, item.y1, item.x2, item.y2, item.size);
+}
+
+/** Opacity of a stroke or of a shape that was snapped from a pen stroke. */
+export function itemOpacity(item: StrokeItem | ShapeItem): number {
+  const tool = item.k === 's' ? item.tool : item.tool;
+  return tool ? PRESETS[tool].opacity : 1;
+}
+
+export function itemIsHighlight(item: StrokeItem | ShapeItem): boolean {
+  const tool = item.k === 's' ? item.tool : item.tool;
+  return tool === 'highlighter';
 }
 
 const pathCache = new WeakMap<object, SkPath>();
@@ -103,32 +116,85 @@ export function rasterizeText(item: TextItem, scale: number): { base64: string; 
   return { base64, w, h };
 }
 
+// -------------------------------------------------------------------- images
+
+const imageCache = new Map<string, SkImage>();
+const imageLoading = new Map<string, Promise<SkImage | null>>();
+
+export function imageKey(docId: string, file: string): string {
+  return docId + '/' + file;
+}
+
+export function getCachedImage(docId: string, file: string): SkImage | undefined {
+  return imageCache.get(imageKey(docId, file));
+}
+
+/** Loads (and caches) an image stored in a document folder. */
+export function loadImage(docId: string, file: string): Promise<SkImage | null> {
+  const key = imageKey(docId, file);
+  const hit = imageCache.get(key);
+  if (hit) return Promise.resolve(hit);
+  const pending = imageLoading.get(key);
+  if (pending) return pending;
+  const job = Skia.Data.fromURI(docDir(docId) + file)
+    .then((data) => {
+      const img = Skia.Image.MakeImageFromEncoded(data);
+      if (img) imageCache.set(key, img);
+      return img;
+    })
+    .catch(() => null)
+    .then((img) => {
+      imageLoading.delete(key);
+      return img;
+    });
+  imageLoading.set(key, job);
+  return job;
+}
+
+export function imageFilesOf(items: Item[]): string[] {
+  const out: string[] = [];
+  for (const it of items) if (it.k === 'i') out.push(it.file);
+  return out;
+}
+
 // ------------------------------------------------------------------- drawing
 
-function drawItem(canvas: SkCanvas, paint: SkPaint, item: Item) {
+function drawImageItem(canvas: SkCanvas, paint: SkPaint, item: ImageItem, docId: string) {
+  const img = getCachedImage(docId, item.file);
+  if (!img) return;
+  paint.setAlphaf(1);
+  paint.setBlendMode(BlendMode.SrcOver);
+  canvas.drawImageRect(
+    img,
+    Skia.XYWHRect(0, 0, img.width(), img.height()),
+    Skia.XYWHRect(item.x, item.y, item.w, item.h),
+    paint,
+    true
+  );
+}
+
+function drawItem(canvas: SkCanvas, paint: SkPaint, item: Item, docId: string) {
   if (item.k === 't') {
     makeParagraph(item).paint(canvas, item.x, item.y);
     return;
   }
+  if (item.k === 'i') {
+    drawImageItem(canvas, paint, item, docId);
+    return;
+  }
   paint.setStyle(PaintStyle.Fill);
   paint.setColor(Skia.Color(item.color));
-  if (item.k === 's') {
-    const preset = PRESETS[item.tool];
-    paint.setAlphaf(preset.opacity);
-    paint.setBlendMode(item.tool === 'highlighter' ? BlendMode.Multiply : BlendMode.SrcOver);
-  } else {
-    paint.setAlphaf(1);
-    paint.setBlendMode(BlendMode.SrcOver);
-  }
+  paint.setAlphaf(itemOpacity(item));
+  paint.setBlendMode(itemIsHighlight(item) ? BlendMode.Multiply : BlendMode.SrcOver);
   canvas.drawPath(itemPath(item), paint);
 }
 
 /** Records all items of a page into an SkPicture (cheap to replay while panning/zooming). */
-export function createItemsPicture(items: Item[], w: number, h: number): SkPicture {
+export function createItemsPicture(items: Item[], w: number, h: number, docId = ''): SkPicture {
   return createPicture((canvas) => {
     const paint = Skia.Paint();
     paint.setAntiAlias(true);
-    for (let i = 0; i < items.length; i++) drawItem(canvas, paint, items[i]);
+    for (let i = 0; i < items.length; i++) drawItem(canvas, paint, items[i], docId);
   }, Skia.XYWHRect(0, 0, w, h));
 }
 

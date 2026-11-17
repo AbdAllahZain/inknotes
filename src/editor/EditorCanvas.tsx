@@ -1,12 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LayoutChangeEvent, StyleSheet, View } from 'react-native';
-import { Canvas, Circle, Group, Path, Skia } from '@shopify/react-native-skia';
+import {
+  Canvas,
+  Circle,
+  DashPathEffect,
+  Group,
+  Path,
+  Picture,
+  Rect,
+  RoundedRect,
+  Skia,
+} from '@shopify/react-native-skia';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import {
   cancelAnimation,
   runOnJS,
   useAnimatedReaction,
   useDerivedValue,
+  useFrameCallback,
   useSharedValue,
   withDecay,
   withTiming,
@@ -15,20 +26,23 @@ import {
   buildOutline,
   newFilterState,
   oneEuroStep,
+  recognizeShape,
   shapeOutlines,
   simulatePressure,
   stylusPressure,
   type ShapeKind,
 } from '../ink/engine';
-import { appendPoly } from '../ink/render';
+import type { Bounds } from '../ink/geometry';
+import { appendPoly, createItemsPicture } from '../ink/render';
 import { PRESETS } from '../tools';
-import { theme } from '../theme';
-import type { Page, ShapeItem, StrokeItem, ToolId } from '../types';
+import { useTheme } from '../theme';
+import type { InkTool, Item, Page, ShapeItem, StrokeItem, ToolId } from '../types';
 import { uid } from '../services/storage';
 import { PageLayer } from './PageLayer';
 
 const MARGIN = 10;
 const GAP = 14;
+const RULER_TH = 56;
 
 // presets as plain numbers so worklets can capture them
 const PRESET_NUMS: Record<string, number[]> = {};
@@ -37,7 +51,8 @@ const PRESET_NUMS: Record<string, number[]> = {};
   PRESET_NUMS[k] = [p.gain, p.minFrac, p.opacity, p.fingerCutoff, p.fingerBeta, p.penCutoff, p.penBeta];
 });
 
-export type GotoRequest = { page: number; nonce: number };
+export type GotoRequest = { page: number; nonce: number; instant?: boolean };
+export type SelectionSnap = { pageIndex: number; items: Item[]; bounds: Bounds };
 
 type Props = {
   docId: string;
@@ -49,11 +64,16 @@ type Props = {
   stylusOnly: boolean;
   gotoRequest: GotoRequest | null;
   fitNonce: number;
+  selection: SelectionSnap | null;
+  rulerOn: boolean;
   onAddItem: (pageIndex: number, item: StrokeItem | ShapeItem) => void;
   onEraseAt: (pageIndex: number, x: number, y: number, r: number) => void;
   onEraseEnd: () => void;
   onTextTap: (pageIndex: number, x: number, y: number) => void;
   onCurrentPage: (index: number) => void;
+  onSelectTap: (pageIndex: number, x: number, y: number) => void;
+  onLasso: (pageIndex: number, poly: number[]) => void;
+  onSelectionTransform: (s: number, tx: number, ty: number) => void;
 };
 
 function computeLayout(pages: Page[]) {
@@ -71,7 +91,8 @@ function computeLayout(pages: Page[]) {
 }
 
 export function EditorCanvas(props: Props) {
-  const { docId, pages, tool, color, size, shape, stylusOnly } = props;
+  const { docId, pages, tool, color, size, shape, stylusOnly, selection, rulerOn } = props;
+  const theme = useTheme();
   const cb = useRef(props);
   cb.current = props;
 
@@ -102,7 +123,9 @@ export function EditorCanvas(props: Props) {
   }, [tool, color, size, shape, stylusOnly]);
 
   // ---- live drawing state ---------------------------------------------------
-  const mode = useSharedValue(0); // 0 none, 1 stroke, 2 shape, 3 erase, 4 text tap, 5 navigate
+  // mode: 0 none, 1 stroke, 2 shape, 3 erase, 4 text tap, 5 navigate,
+  //       6 lasso / tap-select, 7 move selection, 8 scale selection, 10 move ruler
+  const mode = useSharedValue(0);
   const liveVisible = useSharedValue(0);
   const serial = useSharedValue(0);
   const livePage = useSharedValue(-1);
@@ -126,6 +149,26 @@ export function EditorCanvas(props: Props) {
   const erX = useSharedValue(0);
   const erY = useSharedValue(0);
   const erR = useSharedValue(10);
+  // hold-to-snap
+  const snapped = useSharedValue(0); // 0 waiting, 1 snapped, -1 tried and failed
+  const snapKind = useSharedValue(0); // 0 none, 1 line, 2 ellipse, 3 rect
+  const lastMoveT = useSharedValue(0);
+  const lastMoveXY = useSharedValue<number[]>([0, 0]);
+  // selection
+  const selActive = useSharedValue(0);
+  const selPage = useSharedValue(-1);
+  const selBase = useSharedValue<number[]>([0, 0, 0, 0]);
+  const selM = useSharedValue<number[]>([1, 0, 0]); // cumulative: p' = s*p + t
+  const selInc = useSharedValue<number[]>([1, 0, 0, 0, 0]); // live: [s2, ax, ay, dx, dy]
+  const selStart = useSharedValue<number[]>([0, 0, 0, 0, 1]);
+  // ruler
+  const rulerOnSV = useSharedValue(0);
+  const rcx = useSharedValue(200);
+  const rcy = useSharedValue(200);
+  const rang = useSharedValue(0);
+  const rotStart = useSharedValue(0);
+  const rulerGesture = useSharedValue(0);
+  const rulerEdge = useSharedValue(0);
 
   // ---- layout bookkeeping ---------------------------------------------------
   const [range, setRange] = useState({ first: 0, last: 1 });
@@ -169,6 +212,8 @@ export function EditorCanvas(props: Props) {
         tx.value = clampTx(0, s);
         ty.value = first ? 0 : clampTy(ty.value, s);
         inited.value = 1;
+        rcx.value = width / 2;
+        rcy.value = height * 0.35;
       } else {
         ty.value = clampTy(ty.value, sc.value);
       }
@@ -191,8 +236,36 @@ export function EditorCanvas(props: Props) {
     const L = layoutSV.value;
     if (g.page < 0 || g.page * 4 + 3 >= L.length) return;
     const s = sc.value;
-    ty.value = withTiming(clampTy(-(L[g.page * 4 + 1] - MARGIN) * s, s), { duration: 220 });
+    cancelAnimation(ty);
+    const target = clampTy(-(L[g.page * 4 + 1] - MARGIN) * s, s);
+    if (g.instant) ty.value = target;
+    else ty.value = withTiming(target, { duration: 220 });
   }, [props.gotoRequest?.nonce]);
+
+  // selection snapshot -> shared values
+  useEffect(() => {
+    selM.value = [1, 0, 0];
+    selInc.value = [1, 0, 0, 0, 0];
+    if (selection) {
+      const b = selection.bounds;
+      selBase.value = [b.x0, b.y0, b.x1, b.y1];
+      selPage.value = selection.pageIndex;
+      selActive.value = 1;
+    } else {
+      selActive.value = 0;
+      selPage.value = -1;
+    }
+  }, [selection]);
+
+  // ruler on/off
+  useEffect(() => {
+    rulerOnSV.value = rulerOn ? 1 : 0;
+    if (rulerOn && viewW.value > 0) {
+      rcx.value = viewW.value / 2;
+      rcy.value = viewH.value * 0.35;
+      rang.value = 0;
+    }
+  }, [rulerOn]);
 
   const notifyPage = useCallback((i: number) => cb.current.onCurrentPage(i), []);
 
@@ -241,7 +314,6 @@ export function EditorCanvas(props: Props) {
     []
   );
 
-
   // ---- JS callbacks ---------------------------------------------------------
   const clearLiveIfSame = useCallback((s: number) => {
     if (serial.value === s) {
@@ -256,7 +328,7 @@ export function EditorCanvas(props: Props) {
       const item: StrokeItem = {
         id: uid(),
         k: 's',
-        tool: toolName as StrokeItem['tool'],
+        tool: toolName as InkTool,
         color: col,
         size: sz,
         pts: rounded,
@@ -268,7 +340,18 @@ export function EditorCanvas(props: Props) {
   );
 
   const jsAddShape = useCallback(
-    (page: number, kind: string, col: string, sz: number, x1: number, y1: number, x2: number, y2: number, s: number) => {
+    (
+      page: number,
+      kind: string,
+      col: string,
+      sz: number,
+      x1: number,
+      y1: number,
+      x2: number,
+      y2: number,
+      s: number,
+      fromTool: string
+    ) => {
       const item: ShapeItem = {
         id: uid(),
         k: 'h',
@@ -280,6 +363,7 @@ export function EditorCanvas(props: Props) {
         x2: Math.round(x2 * 10) / 10,
         y2: Math.round(y2 * 10) / 10,
       };
+      if (fromTool) item.tool = fromTool as InkTool;
       cb.current.onAddItem(page, item);
       requestAnimationFrame(() => requestAnimationFrame(() => clearLiveIfSame(s)));
     },
@@ -289,6 +373,12 @@ export function EditorCanvas(props: Props) {
   const jsErase = useCallback((page: number, x: number, y: number, r: number) => cb.current.onEraseAt(page, x, y, r), []);
   const jsEraseEnd = useCallback(() => cb.current.onEraseEnd(), []);
   const jsTextTap = useCallback((page: number, x: number, y: number) => cb.current.onTextTap(page, x, y), []);
+  const jsSelectTap = useCallback((page: number, x: number, y: number) => cb.current.onSelectTap(page, x, y), []);
+  const jsLasso = useCallback((page: number, poly: number[]) => cb.current.onLasso(page, poly), []);
+  const jsSelTransform = useCallback(
+    (s: number, tx2: number, ty2: number) => cb.current.onSelectionTransform(s, tx2, ty2),
+    []
+  );
 
   // ---- worklet helpers ------------------------------------------------------
   const pageAt = (cx: number, cy: number) => {
@@ -303,6 +393,40 @@ export function EditorCanvas(props: Props) {
     return -1;
   };
 
+  const rulerLen = () => {
+    'worklet';
+    return Math.min(viewW.value * 0.85, 1000);
+  };
+
+  const inRuler = (x: number, y: number) => {
+    'worklet';
+    if (rulerOnSV.value === 0) return false;
+    const dx = x - rcx.value;
+    const dy = y - rcy.value;
+    const c = Math.cos(rang.value);
+    const s = Math.sin(rang.value);
+    const lx = dx * c + dy * s;
+    const ly = -dx * s + dy * c;
+    return Math.abs(lx) <= rulerLen() / 2 && Math.abs(ly) <= RULER_TH / 2;
+  };
+
+  /** Projects a screen point onto the ruler edge chosen when the stroke began. */
+  const snapToRuler = (x: number, y: number) => {
+    'worklet';
+    const edge = rulerEdge.value;
+    if (edge === 0) return [x, y];
+    const dx = x - rcx.value;
+    const dy = y - rcy.value;
+    const c = Math.cos(rang.value);
+    const s = Math.sin(rang.value);
+    let lx = dx * c + dy * s;
+    const half = rulerLen() / 2;
+    if (lx > half) lx = half;
+    if (lx < -half) lx = -half;
+    const ly = edge * (RULER_TH / 2);
+    return [rcx.value + lx * c - ly * s, rcy.value + lx * s + ly * c];
+  };
+
   const addStrokePoint = (x: number, y: number, rawPressure: number, stylus: boolean) => {
     'worklet';
     const lp = liveParams.value;
@@ -314,6 +438,22 @@ export function EditorCanvas(props: Props) {
     const now = Date.now();
     oneEuroStep(f, x, y, now, lp[4], lp[5]);
     filt.value = f;
+    let fx = f[0];
+    let fy = f[1];
+    if (rulerEdge.value !== 0) {
+      const q = snapToRuler(fx, fy);
+      fx = q[0];
+      fy = q[1];
+    }
+    // movement tracking for "hold to snap"
+    const lm = lastMoveXY.value;
+    const mdx = fx - lm[0];
+    const mdy = fy - lm[1];
+    if (mdx * mdx + mdy * mdy > 9) {
+      lastMoveXY.value = [fx, fy];
+      lastMoveT.value = now;
+      if (snapped.value === -1) snapped.value = 0;
+    }
     let p = prs.value;
     if (stylus && rawPressure >= 0) {
       p = stylusPressure(p, rawPressure);
@@ -325,14 +465,36 @@ export function EditorCanvas(props: Props) {
     }
     prs.value = p;
     const s = sc.value;
-    const cx = (f[0] - tx.value) / s - liveOx.value;
-    const cy = (f[1] - ty.value) / s - liveOy.value;
+    const cx = (fx - tx.value) / s - liveOx.value;
+    const cy = (fy - ty.value) / s - liveOy.value;
     livePts.modify((arr) => {
       'worklet';
       arr.push(cx, cy, p);
       return arr;
     });
   };
+
+  // hold the pen still ~0.5s at the end of a stroke -> straight line / ellipse / rectangle
+  useFrameCallback(() => {
+    'worklet';
+    if (mode.value !== 1 || snapped.value !== 0) return;
+    if (Date.now() - lastMoveT.value < 550) return;
+    const pts = livePts.value;
+    if (pts.length < 24) return;
+    const r = recognizeShape(pts);
+    if (r[0] === 0) {
+      snapped.value = -1;
+      return;
+    }
+    snapped.value = 1;
+    snapKind.value = r[0];
+    liveShape.value = r[0] === 1 ? 'line' : r[0] === 2 ? 'ellipse' : 'rect';
+    sx1.value = r[1];
+    sy1.value = r[2];
+    sx2.value = r[3];
+    sy2.value = r[4];
+    mode.value = 2;
+  });
 
   // ---- gestures -------------------------------------------------------------
   const gesture = useMemo(() => {
@@ -345,6 +507,14 @@ export function EditorCanvas(props: Props) {
         cancelAnimation(tx);
         cancelAnimation(ty);
         const stylus = e.stylusData !== undefined;
+
+        // the ruler body always moves (finger or pen)
+        if (inRuler(e.x, e.y)) {
+          mode.value = 10;
+          navStart.value = [rcx.value, rcy.value];
+          return;
+        }
+
         const t = toolSV.value;
         let m = 0;
         if (t === 'hand') m = 5;
@@ -353,6 +523,7 @@ export function EditorCanvas(props: Props) {
         else if (t === 'shape') m = 2;
         else if (t === 'eraser') m = 3;
         else if (t === 'text') m = 4;
+        else if (t === 'select') m = 6;
 
         if (m === 5) {
           mode.value = 5;
@@ -390,6 +561,24 @@ export function EditorCanvas(props: Props) {
           livePts.value = [];
           filt.value = newFilterState();
           prs.value = stylus ? 0.5 : 0.6;
+          snapped.value = 0;
+          snapKind.value = 0;
+          lastMoveXY.value = [e.x, e.y];
+          lastMoveT.value = Date.now();
+          // ruler: remember which edge the stroke started next to
+          rulerEdge.value = 0;
+          if (rulerOnSV.value === 1) {
+            const dx = e.x - rcx.value;
+            const dy = e.y - rcy.value;
+            const c = Math.cos(rang.value);
+            const sn = Math.sin(rang.value);
+            const lx = dx * c + dy * sn;
+            const ly = -dx * sn + dy * c;
+            if (Math.abs(lx) <= rulerLen() / 2 + 24) {
+              if (Math.abs(ly - RULER_TH / 2) < 30) rulerEdge.value = 1;
+              else if (Math.abs(ly + RULER_TH / 2) < 30) rulerEdge.value = -1;
+            }
+          }
           liveVisible.value = 1;
           addStrokePoint(e.x, e.y, e.stylusData ? e.stylusData.pressure : -1, stylus);
         } else if (m === 2) {
@@ -397,6 +586,7 @@ export function EditorCanvas(props: Props) {
           liveColor.value = colorSV.value;
           liveOpacity.value = 1;
           liveShape.value = shapeSV.value;
+          snapKind.value = 0;
           sx1.value = cx - liveOx.value;
           sy1.value = cy - liveOy.value;
           sx2.value = sx1.value;
@@ -405,6 +595,54 @@ export function EditorCanvas(props: Props) {
         } else if (m === 3) {
           eraseLast.value = [-999, -999];
           eraserOn.value = 1;
+        } else if (m === 6) {
+          if (selActive.value === 1) {
+            const sp = selPage.value;
+            const lx = cx - L[sp * 4];
+            const ly = cy - L[sp * 4 + 1];
+            const M = selM.value;
+            const b = selBase.value;
+            const x0 = M[0] * b[0] + M[1];
+            const y0 = M[0] * b[1] + M[2];
+            const x1 = M[0] * b[2] + M[1];
+            const y1 = M[0] * b[3] + M[2];
+            const hr = 30 / s;
+            let hit = 0;
+            let ax = 0;
+            let ay = 0;
+            if (Math.abs(lx - x1) < hr && Math.abs(ly - y1) < hr) {
+              hit = 1;
+              ax = x0;
+              ay = y0;
+            } else if (Math.abs(lx - x0) < hr && Math.abs(ly - y0) < hr) {
+              hit = 1;
+              ax = x1;
+              ay = y1;
+            } else if (Math.abs(lx - x1) < hr && Math.abs(ly - y0) < hr) {
+              hit = 1;
+              ax = x0;
+              ay = y1;
+            } else if (Math.abs(lx - x0) < hr && Math.abs(ly - y1) < hr) {
+              hit = 1;
+              ax = x1;
+              ay = y0;
+            }
+            if (hit === 1) {
+              const d0 = Math.sqrt((lx - ax) * (lx - ax) + (ly - ay) * (ly - ay));
+              selStart.value = [lx, ly, ax, ay, Math.max(8, d0)];
+              selInc.value = [1, ax, ay, 0, 0];
+              mode.value = 8;
+              return;
+            }
+            const pad = 8 / s;
+            if (lx >= x0 - pad && lx <= x1 + pad && ly >= y0 - pad && ly <= y1 + pad) {
+              selInc.value = [1, 0, 0, 0, 0];
+              mode.value = 7;
+              return;
+            }
+          }
+          livePts.value = [cx - liveOx.value, cy - liveOy.value, 1];
+          liveVisible.value = 1;
         }
       })
       .onUpdate((e) => {
@@ -413,9 +651,12 @@ export function EditorCanvas(props: Props) {
         if (m === 1) {
           addStrokePoint(e.x, e.y, e.stylusData ? e.stylusData.pressure : -1, e.stylusData !== undefined);
         } else if (m === 2) {
-          const s = sc.value;
-          sx2.value = (e.x - tx.value) / s - liveOx.value;
-          sy2.value = (e.y - ty.value) / s - liveOy.value;
+          const k = snapKind.value;
+          if (k === 0 || k === 1) {
+            const s = sc.value;
+            sx2.value = (e.x - tx.value) / s - liveOx.value;
+            sy2.value = (e.y - ty.value) / s - liveOy.value;
+          }
         } else if (m === 3) {
           const s = sc.value;
           const cx = (e.x - tx.value) / s;
@@ -440,6 +681,34 @@ export function EditorCanvas(props: Props) {
           const s = sc.value;
           tx.value = clampTx(st[0] + e.translationX, s);
           ty.value = clampTy(st[1] + e.translationY, s);
+        } else if (m === 6) {
+          const s = sc.value;
+          const x = (e.x - tx.value) / s - liveOx.value;
+          const y = (e.y - ty.value) / s - liveOy.value;
+          livePts.modify((arr) => {
+            'worklet';
+            arr.push(x, y, 1);
+            return arr;
+          });
+        } else if (m === 7) {
+          const s = sc.value;
+          selInc.value = [1, 0, 0, e.translationX / s, e.translationY / s];
+        } else if (m === 8) {
+          const s = sc.value;
+          const st = selStart.value;
+          const L = layoutSV.value;
+          const sp = selPage.value;
+          const lx = (e.x - tx.value) / s - L[sp * 4];
+          const ly = (e.y - ty.value) / s - L[sp * 4 + 1];
+          const d = Math.sqrt((lx - st[2]) * (lx - st[2]) + (ly - st[3]) * (ly - st[3]));
+          let s2 = d / st[4];
+          if (s2 < 0.15) s2 = 0.15;
+          if (s2 > 8) s2 = 8;
+          selInc.value = [s2, st[2], st[3], 0, 0];
+        } else if (m === 10) {
+          const st = navStart.value;
+          rcx.value = st[0] + e.translationX;
+          rcy.value = st[1] + e.translationY;
         }
       })
       .onEnd((e, success) => {
@@ -466,7 +735,8 @@ export function EditorCanvas(props: Props) {
               sy1.value,
               sx2.value,
               sy2.value,
-              serial.value
+              serial.value,
+              snapKind.value > 0 ? toolSV.value : ''
             );
           } else {
             liveVisible.value = 0;
@@ -495,17 +765,41 @@ export function EditorCanvas(props: Props) {
           if (cw > viewW.value) {
             tx.value = withDecay({ velocity: e.velocityX, clamp: [viewW.value - cw, 0] });
           }
+        } else if (m === 6) {
+          const pts = livePts.value;
+          if (e.translationX * e.translationX + e.translationY * e.translationY < 100 || pts.length < 12) {
+            runOnJS(jsSelectTap)(livePage.value, pts[0], pts[1]);
+          } else {
+            const poly: number[] = [];
+            for (let i = 0; i + 1 < pts.length; i += 3) poly.push(pts[i], pts[i + 1]);
+            runOnJS(jsLasso)(livePage.value, poly);
+          }
+          liveVisible.value = 0;
+          livePts.value = [];
+        } else if (m === 7 || m === 8) {
+          const M = selM.value;
+          const inc = selInc.value;
+          const s2 = inc[0];
+          const ns = s2 * M[0];
+          const ntx = s2 * M[1] + (inc[1] - s2 * inc[1] + inc[3]);
+          const nty = s2 * M[2] + (inc[2] - s2 * inc[2] + inc[4]);
+          const moved = Math.abs(s2 - 1) > 0.001 || Math.abs(inc[3]) > 0.3 || Math.abs(inc[4]) > 0.3;
+          selM.value = [ns, ntx, nty];
+          selInc.value = [1, 0, 0, 0, 0];
+          if (moved) runOnJS(jsSelTransform)(ns, ntx, nty);
         }
       })
       .onFinalize((_e, success) => {
         'worklet';
         if (!success) {
-          // cancelled (second finger landed, system gesture, ...): drop the unfinished stroke
-          if (mode.value === 1 || mode.value === 2) {
+          const m = mode.value;
+          // cancelled (second finger landed, system gesture, ...): drop the unfinished work
+          if (m === 1 || m === 2 || m === 6) {
             liveVisible.value = 0;
             livePts.value = [];
           }
-          if (mode.value === 3) {
+          if (m === 7 || m === 8) selInc.value = [1, 0, 0, 0, 0];
+          if (m === 3) {
             eraserOn.value = 0;
             runOnJS(jsEraseEnd)();
           }
@@ -518,12 +812,15 @@ export function EditorCanvas(props: Props) {
         cancelAnimation(tx);
         cancelAnimation(ty);
         cancelAnimation(sc);
+        rulerGesture.value = inRuler(e.focalX, e.focalY) ? 1 : 0;
         // a second finger means "navigate": discard any unfinished stroke
-        if (mode.value === 1 || mode.value === 2) {
+        const m = mode.value;
+        if (m === 1 || m === 2 || m === 6) {
           liveVisible.value = 0;
           livePts.value = [];
         }
-        if (mode.value === 3) {
+        if (m === 7 || m === 8) selInc.value = [1, 0, 0, 0, 0];
+        if (m === 3) {
           eraserOn.value = 0;
           runOnJS(jsEraseEnd)();
         }
@@ -532,6 +829,7 @@ export function EditorCanvas(props: Props) {
       })
       .onUpdate((e) => {
         'worklet';
+        if (rulerGesture.value === 1) return;
         const st = pinchStart.value;
         const fit = viewW.value / contentW.value;
         const minS = fit * 0.6;
@@ -548,6 +846,7 @@ export function EditorCanvas(props: Props) {
       })
       .onEnd(() => {
         'worklet';
+        if (rulerGesture.value === 1) return;
         const fit = viewW.value / contentW.value;
         if (sc.value < fit) {
           // snap back to fit width when zoomed out
@@ -557,7 +856,19 @@ export function EditorCanvas(props: Props) {
         }
       });
 
-    return Gesture.Simultaneous(pan, pinch);
+    // two fingers rotating on top of the ruler turn the ruler
+    const rotate = Gesture.Rotation()
+      .onStart((e) => {
+        'worklet';
+        rulerGesture.value = inRuler(e.anchorX, e.anchorY) ? 1 : 0;
+        rotStart.value = rang.value;
+      })
+      .onUpdate((e) => {
+        'worklet';
+        if (rulerGesture.value === 1) rang.value = rotStart.value + e.rotation;
+      });
+
+    return Gesture.Simultaneous(pan, pinch, rotate);
   }, []);
 
   // ---- derived render values ------------------------------------------------
@@ -580,21 +891,96 @@ export function EditorCanvas(props: Props) {
     return path;
   });
 
+  const lassoPath = useDerivedValue(() => {
+    const path = Skia.Path.Make();
+    if (liveVisible.value === 0 || mode.value !== 6) return path;
+    const pts = livePts.value;
+    const n = pts.length / 3;
+    if (n < 2) return path;
+    path.moveTo(pts[0] + liveOx.value, pts[1] + liveOy.value);
+    for (let i = 1; i < n; i++) path.lineTo(pts[i * 3] + liveOx.value, pts[i * 3 + 1] + liveOy.value);
+    path.close();
+    return path;
+  });
+  const lassoStroke = useDerivedValue(() => 1.6 / sc.value);
   const eraserStroke = useDerivedValue(() => 1.5 / sc.value);
+
+  // selection overlay: cumulative matrix composed with the live (in-gesture) matrix
+  const selTransform = useDerivedValue(() => {
+    const M = selM.value;
+    const inc = selInc.value;
+    const s2 = inc[0];
+    const s = s2 * M[0];
+    const t1 = s2 * M[1] + (inc[1] - s2 * inc[1] + inc[3]);
+    const t2 = s2 * M[2] + (inc[2] - s2 * inc[2] + inc[4]);
+    const L = layoutSV.value;
+    const p = selPage.value;
+    const ox = p >= 0 && p * 4 < L.length ? L[p * 4] : 0;
+    const oy = p >= 0 && p * 4 < L.length ? L[p * 4 + 1] : 0;
+    return [{ translateX: ox + t1 }, { translateY: oy + t2 }, { scale: s }];
+  });
+  const selTotalScale = useDerivedValue(() => sc.value * selInc.value[0] * selM.value[0]);
+  const selStroke = useDerivedValue(() => 1.6 / selTotalScale.value);
+  const handleR = useDerivedValue(() => 9 / selTotalScale.value);
+  const handleStroke = useDerivedValue(() => 2 / selTotalScale.value);
+
+  const selPic = useMemo(() => {
+    if (!selection) return null;
+    const pg = pages[selection.pageIndex];
+    if (!pg) return null;
+    return createItemsPicture(selection.items, pg.w, pg.h, docId);
+  }, [selection]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ruler (screen space)
+  const rulerTransform = useDerivedValue(() => [
+    { translateX: rcx.value },
+    { translateY: rcy.value },
+    { rotate: rang.value },
+  ]);
+  const rulerX = useDerivedValue(() => -rulerLen() / 2);
+  const rulerW = useDerivedValue(() => rulerLen());
+  const rulerTicks = useDerivedValue(() => {
+    const path = Skia.Path.Make();
+    const step = 28.346 * sc.value; // 1 cm in page units
+    const half = rulerLen() / 2;
+    if (step < 7) return path;
+    const kmax = Math.floor(half / step);
+    for (let k = -kmax; k <= kmax; k++) {
+      const x = k * step;
+      const hh = k % 5 === 0 ? 16 : 9;
+      path.moveTo(x, RULER_TH / 2);
+      path.lineTo(x, RULER_TH / 2 - hh);
+      path.moveTo(x, -RULER_TH / 2);
+      path.lineTo(x, -RULER_TH / 2 + hh);
+    }
+    return path;
+  });
 
   const visible = useMemo(() => {
     const out: React.ReactNode[] = [];
     const last = Math.min(range.last, pages.length - 1);
+    const hidden = selection ? selection.items.map((it) => it.id) : undefined;
     for (let i = Math.max(0, range.first); i <= last; i++) {
       const L = layout.flat;
-      out.push(<PageLayer key={pages[i].id} docId={docId} page={pages[i]} x={L[i * 4]} y={L[i * 4 + 1]} />);
+      out.push(
+        <PageLayer
+          key={pages[i].id}
+          docId={docId}
+          page={pages[i]}
+          x={L[i * 4]}
+          y={L[i * 4 + 1]}
+          hiddenIds={selection && selection.pageIndex === i ? hidden : undefined}
+        />
+      );
     }
     return out;
-  }, [range, pages, layout, docId]);
+  }, [range, pages, layout, docId, selection]);
+
+  const sb = selection?.bounds;
 
   return (
     <GestureDetector gesture={gesture}>
-      <View style={styles.fill} onLayout={onLayout} collapsable={false}>
+      <View style={[styles.fill, { backgroundColor: theme.canvasBg }]} onLayout={onLayout} collapsable={false}>
         <Canvas style={StyleSheet.absoluteFill}>
           <Group transform={contentTransform}>
             {visible}
@@ -604,8 +990,54 @@ export function EditorCanvas(props: Props) {
               opacity={liveOpacity}
               blendMode={tool === 'highlighter' ? 'multiply' : 'srcOver'}
             />
+            <Path path={lassoPath} style="stroke" strokeWidth={lassoStroke} color="#4F46E5">
+              <DashPathEffect intervals={[10, 7]} />
+            </Path>
             <Circle cx={erX} cy={erY} r={erR} style="stroke" strokeWidth={eraserStroke} color="#5C6BC0" opacity={eraserOn} />
+            {selection && sb ? (
+              <Group transform={selTransform}>
+                {selPic ? <Picture picture={selPic} /> : null}
+                <Rect
+                  x={sb.x0 - 3}
+                  y={sb.y0 - 3}
+                  width={sb.x1 - sb.x0 + 6}
+                  height={sb.y1 - sb.y0 + 6}
+                  style="stroke"
+                  strokeWidth={selStroke}
+                  color="#4F46E5"
+                >
+                  <DashPathEffect intervals={[8, 5]} />
+                </Rect>
+                {[
+                  [sb.x0 - 3, sb.y0 - 3],
+                  [sb.x1 + 3, sb.y0 - 3],
+                  [sb.x0 - 3, sb.y1 + 3],
+                  [sb.x1 + 3, sb.y1 + 3],
+                ].map((c, i) => (
+                  <Group key={i}>
+                    <Circle cx={c[0]} cy={c[1]} r={handleR} color="#FFFFFF" />
+                    <Circle cx={c[0]} cy={c[1]} r={handleR} style="stroke" strokeWidth={handleStroke} color="#4F46E5" />
+                  </Group>
+                ))}
+              </Group>
+            ) : null}
           </Group>
+          {rulerOn ? (
+            <Group transform={rulerTransform}>
+              <RoundedRect x={rulerX} y={-RULER_TH / 2} width={rulerW} height={RULER_TH} r={10} color="rgba(79,70,229,0.26)" />
+              <RoundedRect
+                x={rulerX}
+                y={-RULER_TH / 2}
+                width={rulerW}
+                height={RULER_TH}
+                r={10}
+                style="stroke"
+                strokeWidth={1.5}
+                color="#4F46E5"
+              />
+              <Path path={rulerTicks} style="stroke" strokeWidth={1.2} color="#312E81" />
+            </Group>
+          ) : null}
         </Canvas>
       </View>
     </GestureDetector>
@@ -613,5 +1045,5 @@ export function EditorCanvas(props: Props) {
 }
 
 const styles = StyleSheet.create({
-  fill: { flex: 1, backgroundColor: theme.canvasBg, overflow: 'hidden' },
+  fill: { flex: 1, overflow: 'hidden' },
 });

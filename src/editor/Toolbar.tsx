@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { t } from '../i18n';
-import { theme } from '../theme';
+import { Palette, useStyles } from '../theme';
 import { COLORS, HIGHLIGHT_COLORS, SIZES, TOOL_ORDER } from '../tools';
 import type { ShapeKind, ToolId } from '../types';
 
@@ -13,6 +13,7 @@ const ICONS: Record<ToolId, string> = {
   eraser: '⌫',
   shape: '△',
   text: 'T',
+  select: '◌',
   hand: '✋',
 };
 
@@ -32,24 +33,25 @@ type Props = {
   onSize: (s: number) => void;
   shape: ShapeKind;
   onShape: (s: ShapeKind) => void;
+  rulerOn: boolean;
+  onRuler: () => void;
+  onImage: () => void;
 };
 
-export function Toolbar({ tool, onTool, color, onColor, size, onSize, shape, onShape }: Props) {
-  const showColors = tool !== 'eraser' && tool !== 'hand';
+export function Toolbar({ tool, onTool, color, onColor, size, onSize, shape, onShape, rulerOn, onRuler, onImage }: Props) {
+  const styles = useStyles(makeStyles);
+  const showColors = tool !== 'eraser' && tool !== 'hand' && tool !== 'select';
   const palette = tool === 'highlighter' ? HIGHLIGHT_COLORS : COLORS;
   const sizes = SIZES[tool];
+  const showOptions = tool !== 'hand' && tool !== 'select';
   return (
     <View style={styles.wrap}>
-      {tool !== 'hand' ? (
+      {showOptions ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optRow}>
           {tool === 'shape'
             ? SHAPES.map((s) => (
-                <Pressable
-                  key={s.kind}
-                  onPress={() => onShape(s.kind)}
-                  style={[styles.chip, shape === s.kind && styles.chipOn]}
-                >
-                  <Text style={[styles.chipText, shape === s.kind && { color: theme.primaryText }]}>
+                <Pressable key={s.kind} onPress={() => onShape(s.kind)} style={[styles.chip, shape === s.kind && styles.chipOn]}>
+                  <Text style={[styles.chipText, shape === s.kind && styles.chipTextOn]}>
                     {s.icon} {t(s.label)}
                   </Text>
                 </Pressable>
@@ -62,7 +64,7 @@ export function Toolbar({ tool, onTool, color, onColor, size, onSize, shape, onS
                     style={[
                       styles.swatch,
                       { backgroundColor: c },
-                      c.toUpperCase() === '#FFFFFF' && { borderColor: theme.border },
+                      c.toUpperCase() === '#FFFFFF' && styles.swatchWhite,
                       color.toUpperCase() === c.toUpperCase() && styles.swatchOn,
                     ]}
                   />
@@ -75,7 +77,7 @@ export function Toolbar({ tool, onTool, color, onColor, size, onSize, shape, onS
             if (tool === 'text') {
               return (
                 <Pressable key={s} onPress={() => onSize(s)} style={[styles.sizeBtn, on && styles.sizeBtnOn]}>
-                  <Text style={{ fontSize: 10 + s * 0.38, color: theme.text, fontWeight: '600' }}>A</Text>
+                  <Text style={{ fontSize: 10 + s * 0.38, color: styles.sizeText.color, fontWeight: '600' }}>A</Text>
                 </Pressable>
               );
             }
@@ -87,9 +89,9 @@ export function Toolbar({ tool, onTool, color, onColor, size, onSize, shape, onS
                     width: d,
                     height: d,
                     borderRadius: d / 2,
-                    backgroundColor: tool === 'eraser' ? theme.textDim : color,
+                    backgroundColor: tool === 'eraser' ? styles.dim.color : color,
                     borderWidth: color.toUpperCase() === '#FFFFFF' ? 1 : 0,
-                    borderColor: theme.border,
+                    borderColor: styles.dim.color,
                     opacity: tool === 'highlighter' ? 0.6 : 1,
                   }}
                 />
@@ -101,29 +103,44 @@ export function Toolbar({ tool, onTool, color, onColor, size, onSize, shape, onS
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.toolRow}>
         {TOOL_ORDER.map((id) => (
           <Pressable key={id} onPress={() => onTool(id)} style={[styles.tool, tool === id && styles.toolOn]}>
-            <Text style={[styles.toolIcon, tool === id && { color: theme.primaryText }]}>{ICONS[id]}</Text>
-            <Text style={[styles.toolLabel, tool === id && { color: theme.primaryText }]}>{t(id)}</Text>
+            <Text style={[styles.toolIcon, tool === id && styles.onPrimary]}>{ICONS[id]}</Text>
+            <Text style={[styles.toolLabel, tool === id && styles.onPrimary]}>{t(id)}</Text>
           </Pressable>
         ))}
+        <View style={styles.sep} />
+        <Pressable onPress={onImage} style={styles.tool}>
+          <Text style={styles.toolIcon}>🖼</Text>
+          <Text style={styles.toolLabel}>{t('image')}</Text>
+        </Pressable>
+        <Pressable onPress={onRuler} style={[styles.tool, rulerOn && styles.toolOn]}>
+          <Text style={[styles.toolIcon, rulerOn && styles.onPrimary]}>📏</Text>
+          <Text style={[styles.toolLabel, rulerOn && styles.onPrimary]}>{t('ruler')}</Text>
+        </Pressable>
       </ScrollView>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  wrap: { backgroundColor: theme.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.border },
-  optRow: { alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, gap: 10 },
-  toolRow: { paddingHorizontal: 8, paddingBottom: 6, paddingTop: 2, gap: 4, flexGrow: 1, justifyContent: 'center' },
-  tool: { alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14, minWidth: 62 },
-  toolOn: { backgroundColor: theme.primary },
-  toolIcon: { fontSize: 20, color: theme.text },
-  toolLabel: { fontSize: 11, color: theme.textDim, marginTop: 1 },
-  swatch: { width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: 'transparent' },
-  swatchOn: { borderWidth: 3, borderColor: theme.primary },
-  sep: { width: 1, height: 24, backgroundColor: theme.border, marginHorizontal: 2 },
-  sizeBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
-  sizeBtnOn: { backgroundColor: theme.surfaceAlt, borderWidth: 2, borderColor: theme.primary },
-  chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, backgroundColor: theme.surfaceAlt },
-  chipOn: { backgroundColor: theme.primary },
-  chipText: { fontSize: 13, color: theme.text, fontWeight: '600' },
-});
+const makeStyles = (th: Palette) =>
+  StyleSheet.create({
+    wrap: { backgroundColor: th.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: th.border },
+    optRow: { alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, gap: 10 },
+    toolRow: { paddingHorizontal: 8, paddingBottom: 6, paddingTop: 2, gap: 4, flexGrow: 1, justifyContent: 'center', alignItems: 'center' },
+    tool: { alignItems: 'center', paddingHorizontal: 11, paddingVertical: 6, borderRadius: 14, minWidth: 58 },
+    toolOn: { backgroundColor: th.primary },
+    toolIcon: { fontSize: 20, color: th.text },
+    toolLabel: { fontSize: 11, color: th.textDim, marginTop: 1 },
+    onPrimary: { color: th.primaryText },
+    swatch: { width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: 'transparent' },
+    swatchWhite: { borderColor: th.border },
+    swatchOn: { borderWidth: 3, borderColor: th.primary },
+    sep: { width: 1, height: 24, backgroundColor: th.border, marginHorizontal: 2 },
+    sizeBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+    sizeBtnOn: { backgroundColor: th.surfaceAlt, borderWidth: 2, borderColor: th.primary },
+    sizeText: { color: th.text },
+    dim: { color: th.textDim },
+    chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, backgroundColor: th.surfaceAlt },
+    chipOn: { backgroundColor: th.primary },
+    chipText: { fontSize: 13, color: th.text, fontWeight: '600' },
+    chipTextOn: { color: th.primaryText },
+  });

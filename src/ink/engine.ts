@@ -374,3 +374,80 @@ export function distToPolyline(px: number, py: number, pts: number[]): number {
   }
   return best;
 }
+
+// ------------------------------------------------------------ shape snapping
+
+/**
+ * "Hold to snap": decides whether a freehand stroke was meant to be a straight line,
+ * an ellipse or a rectangle.
+ * Returns [kind, x1, y1, x2, y2] with kind 0 = none, 1 = line, 2 = ellipse, 3 = rectangle.
+ */
+export function recognizeShape(pts: number[]): number[] {
+  'worklet';
+  const none = [0, 0, 0, 0, 0];
+  const n = Math.floor(pts.length / 3);
+  if (n < 8) return none;
+  let minX = 1e9;
+  let minY = 1e9;
+  let maxX = -1e9;
+  let maxY = -1e9;
+  let len = 0;
+  for (let i = 0; i < n; i++) {
+    const x = pts[i * 3];
+    const y = pts[i * 3 + 1];
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+    if (i > 0) {
+      const dx = x - pts[i * 3 - 3];
+      const dy = y - pts[i * 3 - 2];
+      len += Math.sqrt(dx * dx + dy * dy);
+    }
+  }
+  const w = maxX - minX;
+  const h = maxY - minY;
+  const diag = Math.sqrt(w * w + h * h);
+  if (len < 30 || diag < 20) return none;
+
+  const sx = pts[0];
+  const sy = pts[1];
+  const ex = pts[(n - 1) * 3];
+  const ey = pts[(n - 1) * 3 + 1];
+  const chord = Math.sqrt((ex - sx) * (ex - sx) + (ey - sy) * (ey - sy));
+
+  // straight line: chord is almost as long as the path and nothing bulges away from it
+  if (chord > 20 && chord / len > 0.88) {
+    let maxDev = 0;
+    for (let i = 0; i < n; i++) {
+      const cross = Math.abs((ex - sx) * (sy - pts[i * 3 + 1]) - (sx - pts[i * 3]) * (ey - sy));
+      const dev = cross / chord;
+      if (dev > maxDev) maxDev = dev;
+    }
+    if (maxDev / chord < 0.07) return [1, sx, sy, ex, ey];
+    return none;
+  }
+
+  // closed figure: ellipse or rectangle
+  if (chord < 0.22 * diag && len > 0.6 * (w + h) && w > 14 && h > 14) {
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const rx = w / 2;
+    const ry = h / 2;
+    let eSum = 0;
+    let rSum = 0;
+    for (let i = 0; i < n; i++) {
+      const u = (pts[i * 3] - cx) / rx;
+      const v = (pts[i * 3 + 1] - cy) / ry;
+      eSum += Math.abs(Math.sqrt(u * u + v * v) - 1);
+      const du = Math.abs(Math.abs(u) - 1);
+      const dv = Math.abs(Math.abs(v) - 1);
+      rSum += du < dv ? du : dv;
+    }
+    const eScore = eSum / n;
+    const rScore = rSum / n;
+    if (eScore < 0.13 && eScore <= rScore) return [2, minX, minY, maxX, maxY];
+    if (rScore < 0.11) return [3, minX, minY, maxX, maxY];
+  }
+  return none;
+}
