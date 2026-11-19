@@ -7,7 +7,7 @@ import type { RootStackParamList } from './navigation';
 import { EditorScreen } from './screens/EditorScreen';
 import { HomeScreen } from './screens/HomeScreen';
 import { SettingsProvider } from './settings';
-import { ThemeProvider, useTheme } from './theme';
+import { ThemeProvider, useTheme } from './appTheme';
 import { AppLock } from './ui/AppLock';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();

@@ -19,7 +19,7 @@ import { exportDocToPdf } from '../services/exporter';
 import { exportPageAsPng, exportPagesAsZip, importImage } from '../services/media';
 import { loadDoc, newPage, saveDoc, uid } from '../services/storage';
 import { useSettings } from '../settings';
-import { Palette, useStyles, useTheme } from '../theme';
+import { Palette, useStyles, useTheme } from '../appTheme';
 import { COLORS, DEFAULT_SIZE, HIGHLIGHT_COLORS } from '../tools';
 import { Doc, Item, Page, PageBg, PAPER_CHOICES, ShapeItem, ShapeKind, StrokeItem, TextItem, ToolId } from '../types';
 import { ErrorBoundary } from '../ui/ErrorBoundary';

@@ -3,7 +3,7 @@ import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { t } from '../i18n';
 import { useSettings } from '../settings';
-import { Palette, useStyles } from '../theme';
+import { Palette, useStyles } from '../appTheme';
 
 const GRACE_MS = 45_000;
 

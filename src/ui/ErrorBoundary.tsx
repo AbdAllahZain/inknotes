@@ -2,7 +2,7 @@ import React from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { t } from '../i18n';
 import { logError } from '../services/crashLog';
-import { ThemeContext } from '../theme';
+import { ThemeContext } from '../appTheme';
 
 type Props = { onBack?: () => void; children: React.ReactNode };
 type State = { error: Error | null };

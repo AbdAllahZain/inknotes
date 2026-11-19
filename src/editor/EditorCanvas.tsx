@@ -35,7 +35,7 @@ import {
 import type { Bounds } from '../ink/geometry';
 import { appendPoly, createItemsPicture } from '../ink/render';
 import { PRESETS } from '../tools';
-import { useTheme } from '../theme';
+import { useTheme } from '../appTheme';
 import type { InkTool, Item, Page, ShapeItem, StrokeItem, ToolId } from '../types';
 import { uid } from '../services/storage';
 import { PageLayer } from './PageLayer';

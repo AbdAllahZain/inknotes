@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { t } from '../i18n';
-import { Palette, useStyles } from '../theme';
+import { Palette, useStyles } from '../appTheme';
 import { COLORS } from '../tools';
 
 type Props = {

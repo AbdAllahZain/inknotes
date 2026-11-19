@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { LayoutChangeEvent, PanResponder, StyleSheet, Text, View } from 'react-native';
-import { Palette, useStyles } from '../theme';
+import { Palette, useStyles } from '../appTheme';
 
 type Props = { total: number; current: number; onScrub: (index: number) => void };
 

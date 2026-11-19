@@ -1,6 +1,6 @@
 import React from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Palette, useStyles } from '../theme';
+import { Palette, useStyles } from '../appTheme';
 
 export type SheetItem = {
   key: string;

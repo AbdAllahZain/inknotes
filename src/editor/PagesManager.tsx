@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { t } from '../i18n';
 import { pageThumbUri } from '../services/media';
-import { Palette, useStyles } from '../theme';
+import { Palette, useStyles } from '../appTheme';
 import { Doc, Page, PageBg, PAPER_CHOICES } from '../types';
 import { SheetItem, SheetMenu } from '../ui/SheetMenu';
 

@@ -37,7 +37,7 @@ import {
   setDocTags,
 } from '../services/storage';
 import { useSettings } from '../settings';
-import { Palette, useStyles, useTheme } from '../theme';
+import { Palette, useStyles, useTheme } from '../appTheme';
 import { DocMeta, Folder, PageBg, PAPER_CHOICES, ThemeMode } from '../types';
 import { PromptModal } from '../ui/PromptModal';
 import { SheetItem, SheetMenu } from '../ui/SheetMenu';

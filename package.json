@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test:ink": "node scripts/test-ink.js",
     "postinstall": "patch-package",
-    "test": "node scripts/test-ink.js && node scripts/test-geometry.js && node scripts/test-history.js && node scripts/test-backup.js && node scripts/test-exif.js && node scripts/check-worklet-order.js src/editor/EditorCanvas.tsx src/ink/render.ts src/ink/engine.ts src/ink/geometry.ts"
+    "test": "node scripts/check-duplicates.js && node scripts/test-ink.js && node scripts/test-geometry.js && node scripts/test-history.js && node scripts/test-backup.js && node scripts/test-exif.js && node scripts/check-worklet-order.js src/editor/EditorCanvas.tsx src/ink/render.ts src/ink/engine.ts src/ink/geometry.ts && node scripts/smoke-render.js"
   },
   "dependencies": {
     "@react-navigation/native": "^7.0.14",

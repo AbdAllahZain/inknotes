@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { t } from '../i18n';
-import { Palette, useStyles, useTheme } from '../theme';
+import { Palette, useStyles, useTheme } from '../appTheme';
 
 type Props = {
   visible: boolean;
